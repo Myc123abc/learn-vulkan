@@ -64,6 +64,8 @@ private:
 
   void cleanup() 
   {
+    vkDestroyPipelineLayout(_device, _pipeline_layout, nullptr);
+
     for (auto image_view : _swap_chain_image_views)
       vkDestroyImageView(_device, image_view, nullptr);
 
@@ -672,6 +674,8 @@ private:
     }
   }
 
+    /* Create Pipeline */
+
     static std::vector<char> read_spv_file(const std::string& filename)
     {
       std::ifstream file(filename, std::ios::ate | std::ios::binary);
@@ -729,6 +733,105 @@ private:
 
       // fixed-function stages
 
+      // dynamic state
+      std::vector<VkDynamicState> dynamic_states =
+      {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR
+      };
+      VkPipelineDynamicStateCreateInfo dynamic_state_info = {};
+      dynamic_state_info.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+      dynamic_state_info.dynamicStateCount = dynamic_states.size();
+      dynamic_state_info.pDynamicStates    = dynamic_states.data();
+
+      // vertex input
+      // TODO: currently vertices are hard code in shader, after will change
+      VkPipelineVertexInputStateCreateInfo vertex_input_state_info = {};
+      vertex_input_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+      // input  assembly
+      VkPipelineInputAssemblyStateCreateInfo input_assembly_state_info = {};
+      input_assembly_state_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+      input_assembly_state_info.topology               = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+      input_assembly_state_info.primitiveRestartEnable = VK_FALSE;
+
+      // viewport and scissor
+      VkViewport viewport = 
+      {
+        .width    = (float)_swap_chain_extent.width,
+        .height   = (float)_swap_chain_extent.height,
+        .maxDepth = 1.0f
+      };
+      VkRect2D scissor = 
+      {
+        .extent = _swap_chain_extent
+      };
+      // viewport and scissor will be set at drawing time
+      VkPipelineViewportStateCreateInfo viewport_state_info = 
+      {
+        .sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1,
+        .scissorCount  = 1
+      };
+
+      // rasterizer
+      VkPipelineRasterizationStateCreateInfo rasterizer_state_info =
+      {
+        .sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .depthClampEnable        = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode             = VK_POLYGON_MODE_FILL,
+        .cullMode                = VK_CULL_MODE_BACK_BIT,
+        .frontFace               = VK_FRONT_FACE_CLOCKWISE,
+        .depthBiasEnable         = VK_FALSE,
+        .lineWidth               = 1.0f,
+      };
+
+      // multisampling
+      // TODO: after discuss multisample
+      VkPipelineMultisampleStateCreateInfo multisample_state_info = 
+      {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        .minSampleShading = 1.0f,
+        .sampleShadingEnable = VK_FALSE,
+      };
+
+      // TODO: after discuss depth and stencil test
+
+      // color blending
+      VkPipelineColorBlendAttachmentState color_blend_attachment_state =
+      {
+        .colorWriteMask      = VK_COLOR_COMPONENT_R_BIT |
+                               VK_COLOR_COMPONENT_G_BIT |
+                               VK_COLOR_COMPONENT_B_BIT |
+                               VK_COLOR_COMPONENT_A_BIT,
+        .blendEnable         = VK_FALSE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .colorBlendOp        = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp        = VK_BLEND_OP_ADD,
+      };
+      VkPipelineColorBlendStateCreateInfo color_blend_state_info =
+      {
+        .sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .logicOpEnable   = VK_FALSE,
+        .logicOp         = VK_LOGIC_OP_COPY,
+        .attachmentCount = 1,
+        .pAttachments    = &color_blend_attachment_state,
+      };
+
+      // pipeline layout
+      // TODO: currently is empty
+      VkPipelineLayoutCreateInfo pipeline_layout_info =
+      {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+      };
+      if (vkCreatePipelineLayout(_device, &pipeline_layout_info, nullptr, &_pipeline_layout) != VK_SUCCESS)
+        throw std::runtime_error("failed to create pipeline layout!");
+
       vkDestroyShaderModule(_device, vertex_shader_module, nullptr);
       vkDestroyShaderModule(_device, fragment_shader_module, nullptr);
     }
@@ -780,6 +883,9 @@ private:
 
   // image views
   std::vector<VkImageView> _swap_chain_image_views;
+
+  // pipeline layout
+  VkPipelineLayout _pipeline_layout = VK_NULL_HANDLE;
 };
 
 int main()
