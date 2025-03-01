@@ -871,12 +871,10 @@ private:
       VkPipelineColorBlendAttachmentState color_blend_attachment_state =
       {
         .blendEnable         = VK_FALSE,
-        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
-        .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
-        .colorBlendOp        = VK_BLEND_OP_ADD,
-        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-        .alphaBlendOp        = VK_BLEND_OP_ADD,
+        .colorWriteMask      = VK_COLOR_COMPONENT_R_BIT |
+                               VK_COLOR_COMPONENT_G_BIT |
+                               VK_COLOR_COMPONENT_B_BIT |
+                               VK_COLOR_COMPONENT_A_BIT,
       };
       VkPipelineColorBlendStateCreateInfo color_blend_state_info =
       {
@@ -974,7 +972,6 @@ private:
       if (vkAllocateCommandBuffers(_device, &info, &_command_buffer) != VK_SUCCESS)
         throw std::runtime_error("failed to allocate command buffers!");
     }
-
 
     // Create Sync objects
     void create_sync_objects()
@@ -1098,8 +1095,8 @@ private:
 private:
   // window
   GLFWwindow* _win                         = nullptr;
-  static constexpr uint32_t Window_Height  = 800;
-  static constexpr uint32_t Window_Width   = 600;
+  static constexpr uint32_t Window_Height  = 600;
+  static constexpr uint32_t Window_Width   = 800;
 
   // vulkan instance
   VkInstance _vk;
