@@ -34,11 +34,20 @@ private:
     // don't create OpenGL context
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     // TODO: currently, only disable resize window
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    // glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
     _win = glfwCreateWindow(Window_Width, Window_Height, "Vulkan", nullptr, nullptr);
     if (_win == nullptr)
       throw std::runtime_error("failed to create window!");
+
+    glfwSetWindowUserPointer(_win, this);
+    glfwSetFramebufferSizeCallback(_win, framebuffer_resize_callback);
+  }
+
+  static void framebuffer_resize_callback(GLFWwindow* win, int width, int height)
+  {
+    auto app = reinterpret_cast<App*>(glfwGetWindowUserPointer(win));
+    app->_framebuffer_resized = true;
   }
 
   void init_vulkan()
@@ -71,6 +80,8 @@ private:
 
   void cleanup() 
   {
+    cleanup_swapchain();
+
     for (int i = 0; i < Max_Frame_Number; ++i)
     {
       vkDestroySemaphore(_device, _image_available_semaphores[i], nullptr);
@@ -80,17 +91,10 @@ private:
 
     vkDestroyCommandPool(_device, _command_pool, nullptr);
 
-    for (auto framebuffer : _swapchain_framebuffers)
-      vkDestroyFramebuffer(_device, framebuffer, nullptr);
-
     vkDestroyPipeline(_device, _pipeline, nullptr);
     vkDestroyPipelineLayout(_device, _pipeline_layout, nullptr);
     vkDestroyRenderPass(_device, _render_pass, nullptr);
 
-    for (auto image_view : _swapchain_image_views)
-      vkDestroyImageView(_device, image_view, nullptr);
-
-    vkDestroySwapchainKHR(_device, _swapchain, nullptr);
     vkDestroyDevice(_device, nullptr);
 
     if (Enable_Validation_Layers)
@@ -102,6 +106,44 @@ private:
     glfwDestroyWindow(_win);
     glfwTerminate();
   }
+
+  void cleanup_swapchain()
+  {
+    for (auto framebuffer : _swapchain_framebuffers)
+      vkDestroyFramebuffer(_device, framebuffer, nullptr);
+
+    for (auto image_view : _swapchain_image_views)
+      vkDestroyImageView(_device, image_view, nullptr);
+
+    vkDestroySwapchainKHR(_device, _swapchain, nullptr);
+  }
+
+  void recreate_swapchain()
+  {
+    // FIXME: use oldSwapchain of VkSwapchainCreateInfoKHR
+
+    // TODO: don't pause, I need play music when minimize window 
+    int width = 0, height = 0;
+    glfwGetFramebufferSize(_win, &width, &height);
+    while (width == 0 || height == 0)
+    {
+      glfwGetFramebufferSize(_win, &width, &height);
+      glfwWaitEvents();
+    };
+
+    // wait resources used finishe
+    vkDeviceWaitIdle(_device);
+
+    cleanup_swapchain();
+
+    // recreate swapchain
+    create_swapchain();
+    // recreate image views which reference the images in swapchain
+    create_image_views();
+    // and framebuffers too
+    create_frambuffers();
+  }
+
 
   /* Create Vulkan Instance */
 
@@ -1009,12 +1051,21 @@ private:
     {
       // waiting for previous frame
       vkWaitForFences(_device, 1, &_in_flight_fences[_current_frame], VK_TRUE, UINT64_MAX);
-      vkResetFences(_device, 1, &_in_flight_fences[_current_frame]);
-      // TODO: so how to make sem to signal
 
       // acquiring an image from the swap chain
       uint32_t image_index;
-      vkAcquireNextImageKHR(_device, _swapchain, UINT64_MAX, _image_available_semaphores[_current_frame], VK_NULL_HANDLE, &image_index);
+      VkResult res = vkAcquireNextImageKHR(_device, _swapchain, UINT64_MAX, _image_available_semaphores[_current_frame], VK_NULL_HANDLE, &image_index);
+      if (res == VK_ERROR_OUT_OF_DATE_KHR)
+      {
+        recreate_swapchain();
+        return;
+      }
+      // VK_SUBOPTIMAL_KHR, already acquire the image, proceed anyway
+      else if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
+        throw std::runtime_error("failed to acquire swap chain image!");
+
+      // reset fence to make wait next submit
+      vkResetFences(_device, 1, &_in_flight_fences[_current_frame]);
 
       // recording the command buffer
       vkResetCommandBuffer(_command_buffers[_current_frame], 0);
@@ -1049,7 +1100,15 @@ private:
         .pSwapchains        = swapchains,
         .pImageIndices      = &image_index,
       };
-      vkQueuePresentKHR(_present_queue, &presentation_info);
+      res = vkQueuePresentKHR(_present_queue, &presentation_info);
+      // VK_SUBOPTIMAL_KHR, recreate for best possible result
+      if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR || _framebuffer_resized)
+      {
+        _framebuffer_resized = false;
+        recreate_swapchain();
+      }
+      else if (res != VK_SUCCESS)
+        throw std::runtime_error("failed to present swapchain image!");
 
       // move to next frame
       _current_frame = ++_current_frame % Max_Frame_Number;
@@ -1161,6 +1220,7 @@ private:
 
   // framebuffers
   std::vector<VkFramebuffer> _swapchain_framebuffers;
+  bool _framebuffer_resized = false;
 
   // frame resources
   static constexpr int Max_Frame_Number = 2;
