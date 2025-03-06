@@ -7,6 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+add_definitions(-DFMT_HEADER_ONLY)
+
 find_package(spdlog REQUIRED)
 
 add_executable(triangle main.cpp)

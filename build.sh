@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cmake -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -GNinja -Bbuild
+cmake -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_CXX_FLAGS="-stdlib=libc++" -DCMAKE_BUILD_TYPE=Debug -GNinja -Bbuild
 cmake --build build
 
 glslc shader/shader.vert -o shader/vert.spv

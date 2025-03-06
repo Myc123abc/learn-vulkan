@@ -181,7 +181,7 @@ private:
       extensions.emplace_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 
     // other extentions
-    extensions.insert(extensions.end(), _instance_extensions.begin(), _instance_extensions.end());
+    extensions.append_range(_instance_extensions);
 
     return extensions;
   }
