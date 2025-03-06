@@ -33,21 +33,10 @@ private:
 
     // don't create OpenGL context
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    // TODO: currently, only disable resize window
-    // glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
     _win = glfwCreateWindow(Window_Width, Window_Height, "Vulkan", nullptr, nullptr);
     if (_win == nullptr)
       throw std::runtime_error("failed to create window!");
-
-    glfwSetWindowUserPointer(_win, this);
-    glfwSetFramebufferSizeCallback(_win, framebuffer_resize_callback);
-  }
-
-  static void framebuffer_resize_callback(GLFWwindow* win, int width, int height)
-  {
-    auto app = reinterpret_cast<App*>(glfwGetWindowUserPointer(win));
-    app->_framebuffer_resized = true;
   }
 
   void init_vulkan()
@@ -118,32 +107,6 @@ private:
     vkDestroySwapchainKHR(_device, _swapchain, nullptr);
   }
 
-  void recreate_swapchain()
-  {
-    // FIXME: use oldSwapchain of VkSwapchainCreateInfoKHR
-
-    // TODO: don't pause, I need play music when minimize window 
-    int width = 0, height = 0;
-    glfwGetFramebufferSize(_win, &width, &height);
-    while (width == 0 || height == 0)
-    {
-      glfwGetFramebufferSize(_win, &width, &height);
-      glfwWaitEvents();
-    };
-
-    // wait resources used finishe
-    vkDeviceWaitIdle(_device);
-
-    cleanup_swapchain();
-
-    // recreate swapchain
-    create_swapchain();
-    // recreate image views which reference the images in swapchain
-    create_image_views();
-    // and framebuffers too
-    create_frambuffers();
-  }
-
 
   /* Create Vulkan Instance */
 
@@ -161,7 +124,7 @@ private:
     create_info.pApplicationInfo     = &app_info;
 
     // set extensions
-    auto extensions = get_extensions();
+    auto extensions = get_instance_extensions();
     // check validation of extensions
     check_instance_extensions_support(extensions.size(), extensions.data());
     create_info.enabledExtensionCount   = extensions.size();
@@ -205,7 +168,7 @@ private:
     return app_info;
   }
 
-  std::vector<const char*> get_extensions()
+  std::vector<const char*> get_instance_extensions()
   {
     // GLFW extension for interface with window system
     uint32_t glfw_extension_count = 0;
@@ -216,6 +179,9 @@ private:
     // debug utils extension for message callback
     if constexpr (Enable_Validation_Layers)
       extensions.emplace_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+
+    // other extentions
+    extensions.insert(extensions.end(), _instance_extensions.begin(), _instance_extensions.end());
 
     return extensions;
   }
@@ -653,7 +619,7 @@ private:
     return actual_extent;
   }
 
-  void create_swapchain()
+  void create_swapchain(VkSwapchainKHR old_swapchain = VK_NULL_HANDLE)
   {
     // get info of swap chain
     auto     details        = query_swapchain_support(_physical_device);
@@ -675,6 +641,7 @@ private:
     info.imageExtent              = extent;
     info.imageArrayLayers         = 1;
     info.imageUsage               = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    info.oldSwapchain             = old_swapchain;
 
     // get queue families and set for swap chain
     auto queue_family_indices = find_queue_families(_physical_device);
@@ -1055,13 +1022,7 @@ private:
       // acquiring an image from the swap chain
       uint32_t image_index;
       VkResult res = vkAcquireNextImageKHR(_device, _swapchain, UINT64_MAX, _image_available_semaphores[_current_frame], VK_NULL_HANDLE, &image_index);
-      if (res == VK_ERROR_OUT_OF_DATE_KHR)
-      {
-        recreate_swapchain();
-        return;
-      }
-      // VK_SUBOPTIMAL_KHR, already acquire the image, proceed anyway
-      else if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
+      if (res != VK_SUCCESS)
         throw std::runtime_error("failed to acquire swap chain image!");
 
       // reset fence to make wait next submit
@@ -1100,14 +1061,9 @@ private:
         .pSwapchains        = swapchains,
         .pImageIndices      = &image_index,
       };
+
       res = vkQueuePresentKHR(_present_queue, &presentation_info);
-      // VK_SUBOPTIMAL_KHR, recreate for best possible result
-      if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR || _framebuffer_resized)
-      {
-        _framebuffer_resized = false;
-        recreate_swapchain();
-      }
-      else if (res != VK_SUCCESS)
+      if (res != VK_SUCCESS)
         throw std::runtime_error("failed to present swapchain image!");
 
       // move to next frame
@@ -1178,6 +1134,13 @@ private:
   static constexpr uint32_t Application_Version = VK_MAKE_API_VERSION(0, 0, 0, 0);
   static constexpr uint32_t Engine_Version      = VK_MAKE_API_VERSION(0, 0, 0, 0);
 
+  const std::vector<const char*> _instance_extensions =
+  {
+    // VK_EXT_swapchain_maintenance_1 extension need these
+    VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
+    VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME,
+  };
+
   // validation layers
 #ifdef NDEBUG
   static constexpr bool          Enable_Validation_Layers = false;
@@ -1194,7 +1157,9 @@ private:
   VkPhysicalDevice _physical_device = VK_NULL_HANDLE;
   const std::vector<const char*> _device_extensions = 
   {
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+    // swapchain maintenance extension can auto recreate swapchain
+    VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME,
   };
 
   // logical device
@@ -1220,7 +1185,6 @@ private:
 
   // framebuffers
   std::vector<VkFramebuffer> _swapchain_framebuffers;
-  bool _framebuffer_resized = false;
 
   // frame resources
   static constexpr int Max_Frame_Number = 2;
