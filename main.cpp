@@ -1,5 +1,9 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+
+#include <spdlog/spdlog.h>
+#include <fmt/color.h>
 
 #include <vector>
 #include <stdexcept>
@@ -8,14 +12,49 @@
 #include <ranges>
 #include <set>
 #include <fstream>
-
-#include <spdlog/spdlog.h>
-#include <fmt/color.h>
+#include <array>
 
 // TODO: When rewrite this file, remember use XXX2 new struct or function to replace the old one.
+// HACK: Allocate multi-resources like buffer in single memory allocation,
+//       and store vertices and indices in single buffer.
 
 class App
 {
+private:
+  // Vertex Structure
+  struct Vertex
+  {
+    glm::vec2 position;
+    glm::vec3 color;
+
+    static auto get_binding_description()
+    {
+      return VkVertexInputBindingDescription
+      {
+        .binding   = 0,
+        .stride    = sizeof(Vertex),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+      };
+    }
+
+    static auto get_attribute_descriptions()
+    {
+      std::array<VkVertexInputAttributeDescription, 2> descs;
+
+      descs[0].binding  = 0;
+      descs[0].location = 0;
+      descs[0].format   = VK_FORMAT_R32G32_SFLOAT;
+      descs[0].offset   = offsetof(Vertex, position);
+
+      descs[1].binding  = 0;
+      descs[1].location = 1;
+      descs[1].format   = VK_FORMAT_R32G32B32_SFLOAT;
+      descs[1].offset   = offsetof(Vertex, color);
+
+      return descs;
+    }
+  };
+
 public:
   void run()
   {
@@ -52,6 +91,8 @@ private:
     create_graphics_pipeline();
     create_frambuffers();
     create_command_pool();
+    create_vertex_buffer();
+    create_index_buffer();
     create_command_buffers();
     create_sync_objects();
   }
@@ -70,6 +111,11 @@ private:
   void cleanup() 
   {
     cleanup_swapchain();
+
+    vkDestroyBuffer(_device, _vertex_buffer, nullptr);
+    vkFreeMemory(_device, _vertex_buffer_memory, nullptr);
+    vkDestroyBuffer(_device, _index_buffer, nullptr);
+    vkFreeMemory(_device, _index_buffer_memory, nullptr);
 
     for (int i = 0; i < Max_Frame_Number; ++i)
     {
@@ -452,7 +498,7 @@ private:
       if (queue_family_indices.is_complete())
         break;
 
-      // PERFORMANCE: some queue features may be in a same index,
+      // HACK: some queue features may be in a same index,
       // so less queues best performance when queue is not much
 
       ++i;
@@ -792,8 +838,8 @@ private:
     void create_graphics_pipeline()
     {
       // programmable stages
-      auto vertex_shader_module   = create_shader_module("shader/vert.spv");
-      auto fragment_shader_module = create_shader_module("shader/frag.spv");
+      auto vertex_shader_module   = create_shader_module("shader/vertex.spv");
+      auto fragment_shader_module = create_shader_module("shader/fragment.spv");
 
       VkPipelineShaderStageCreateInfo vertex_shader_stage_info   = {};
       vertex_shader_stage_info.sType    = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -825,9 +871,14 @@ private:
       dynamic_state_info.pDynamicStates    = dynamic_states.data();
 
       // vertex input
-      // TODO: currently vertices are hard code in shader, after will change
+      auto binding_description    = Vertex::get_binding_description();
+      auto attribute_descriptions = Vertex::get_attribute_descriptions();
       VkPipelineVertexInputStateCreateInfo vertex_input_state_info = {};
       vertex_input_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+      vertex_input_state_info.vertexBindingDescriptionCount   = 1;
+      vertex_input_state_info.vertexAttributeDescriptionCount = static_cast<uint32_t>(attribute_descriptions.size());
+      vertex_input_state_info.pVertexBindingDescriptions      = &binding_description;
+      vertex_input_state_info.pVertexAttributeDescriptions    = attribute_descriptions.data();
 
       // input  assembly
       VkPipelineInputAssemblyStateCreateInfo input_assembly_state_info = {};
@@ -957,6 +1008,167 @@ private:
       }
     }
 
+  // Create Vertex Buffer and Index Buffer
+  void create_buffer(
+    VkDeviceSize          size,
+    VkBufferUsageFlags    usage,
+    VkMemoryPropertyFlags properties,
+    VkBuffer&             buffer,
+    VkDeviceMemory&       buffer_memory)
+  {
+    // create buffer
+    VkBufferCreateInfo info =
+    {
+      .sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size        = size,
+      .usage       = usage,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    if (vkCreateBuffer(_device, &info, nullptr, &buffer) != VK_SUCCESS)
+      throw std::runtime_error("failed to create vertex buffer!");
+
+    // memory requirement
+    VkMemoryRequirements mem_req;
+    vkGetBufferMemoryRequirements(_device, buffer, &mem_req);
+
+    // allocate memory
+    VkMemoryAllocateInfo alloc_info =
+    {
+      .sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize  = mem_req.size,
+      .memoryTypeIndex = find_memory_type(mem_req.memoryTypeBits, properties),
+    };
+    if (vkAllocateMemory(_device, &alloc_info, nullptr, &buffer_memory) != VK_SUCCESS)
+      throw std::runtime_error("failed to allocate vertex buffer memory!");
+
+    // assoicate buffer and memory
+    vkBindBufferMemory(_device, buffer, buffer_memory, 0);
+  }
+
+  void copy_buffer(VkBuffer src, VkBuffer dst, VkDeviceSize size) 
+  {
+    // create temporary command buffer to transfer data from stage buffer to device local buffer
+    VkCommandBufferAllocateInfo command_buffer_allocate_info =
+    {
+      .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool        = _command_pool,
+      .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+      .commandBufferCount = 1,
+    };
+    VkCommandBuffer command_buffer;
+    vkAllocateCommandBuffers(_device, &command_buffer_allocate_info, &command_buffer);
+
+    // record start transfer command
+    VkCommandBufferBeginInfo begin_info =
+    {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+    vkBeginCommandBuffer(command_buffer, &begin_info);
+
+    // record transfer data command
+    VkBufferCopy copy_region =
+    {
+      .size = size,
+    };
+    vkCmdCopyBuffer(command_buffer, src, dst, 1, &copy_region);
+
+    // end record command
+    vkEndCommandBuffer(command_buffer);
+
+    // submit command
+    VkSubmitInfo submit_info =
+    {
+      .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+      .commandBufferCount = 1,
+      .pCommandBuffers    = &command_buffer,
+    };
+    vkQueueSubmit(_graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
+
+    // wait transfer to complete
+    vkQueueWaitIdle(_graphics_queue);
+
+    // free temporary command buffer
+    vkFreeCommandBuffers(_device, _command_pool, 1, &command_buffer);
+  }
+
+  void create_GPU_buffer(
+    const void*           data,
+    uint32_t              size,
+    VkMemoryPropertyFlags memory_flags,
+    VkBuffer&             buffer,
+    VkDeviceMemory&       buffer_memory)
+  {
+    // create stage buffer
+    VkBuffer stage_buffer;
+    VkDeviceMemory stage_buffer_memory;
+    create_buffer(
+      size,
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+      stage_buffer,
+      stage_buffer_memory);
+
+    // fill stage buffer
+    // HACK: use VK_MEMORY_PROPERTY_HOST_COHERENT_BIT resolve driver problems.
+    // link: https://docs.vulkan.org/tutorial/latest/04_Vertex_buffers/01_Vertex_buffer_creation.html
+    void* mapped_data;
+    vkMapMemory(_device, stage_buffer_memory, 0, size, 0, &mapped_data);
+    memcpy(mapped_data, data, size);
+    vkUnmapMemory(_device, stage_buffer_memory);
+
+    // create device local vertex buffer
+    create_buffer(
+      size,
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT | memory_flags,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+      buffer,
+      buffer_memory);
+    
+    // copy data to device local buffer
+    copy_buffer(stage_buffer, buffer, size);
+
+    // free stage buffer resources
+    vkDestroyBuffer(_device, stage_buffer, nullptr);
+    vkFreeMemory(_device, stage_buffer_memory, nullptr);
+  }
+
+  void create_vertex_buffer()
+  {
+    auto size = sizeof(_vertices[0]) * _vertices.size();
+    create_GPU_buffer(_vertices.data(), size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, _vertex_buffer, _vertex_buffer_memory);
+  }
+
+  void create_index_buffer()
+  {
+    auto size = sizeof(_indices[0]) * _indices.size();
+    create_GPU_buffer(_indices.data(), size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, _index_buffer, _index_buffer_memory);
+  }
+  
+  /**
+   *  @brief  Get index of expected memory type and properties.
+   *
+   *  @param  type_filter  expected memory type
+   *  @param  properties   expected memory properties
+   *
+   *  @return  index of expected memory type
+   *
+   *  @throw std::runtime_error  If not meet the requirements.
+   */
+  uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties)
+  {
+    VkPhysicalDeviceMemoryProperties mem_properties;
+    vkGetPhysicalDeviceMemoryProperties(_physical_device, &mem_properties);
+
+    for (uint32_t i = 0; i < mem_properties.memoryTypeCount; ++i)
+      if (type_filter & (1 << i) &&
+          (mem_properties.memoryTypes[i].propertyFlags & properties) == properties)
+        return i; 
+
+    throw std::runtime_error("failed to find suitable memory type!");
+  }
+
     // Create Command Buffers
     void create_command_pool()
     {
@@ -1079,7 +1291,6 @@ private:
       if (vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS)
         throw std::runtime_error("failed to begin command buffer!");
 
-      // WARN: if failed, use {{{color}}}
       VkClearValue clear_value = { (float)32/255, (float)33/255, (float)36/255, 1.f };
       VkRenderPassBeginInfo render_pass_begin_info =
       {
@@ -1113,7 +1324,12 @@ private:
       };
       vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 
-      vkCmdDraw(command_buffer, 3, 1, 0, 0);
+      VkBuffer     vertex_buffers[] = { _vertex_buffer };
+      VkDeviceSize offsets[]        = { 0 };
+      vkCmdBindVertexBuffers(command_buffer, 0, 1, vertex_buffers, offsets);
+      vkCmdBindIndexBuffer(command_buffer, _index_buffer, 0, VK_INDEX_TYPE_UINT16);
+
+      vkCmdDrawIndexed(command_buffer, static_cast<uint32_t>(_indices.size()), 1, 0, 0, 0);
 
       vkCmdEndRenderPass(command_buffer);
 
@@ -1198,6 +1414,24 @@ private:
   std::vector<VkSemaphore> _image_available_semaphores;
   std::vector<VkSemaphore> _render_finished_semaphores;
   std::vector<VkFence>     _in_flight_fences;
+
+  // vertices and indices 
+  const std::vector<Vertex> _vertices =
+  {
+    { { -.5f, -.5f }, { 1.f, 0.f, 0.f } },
+    { {  .5f, -.5f }, { 0.f, 1.f, 0.f } },
+    { {  .5f,  .5f }, { 0.f, 0.f, 1.f } },
+    { { -.5f,  .5f }, { 1.f, 1.f, 1.f } },
+  };
+  const std::vector<uint16_t> _indices =
+  {
+    0, 1, 2,
+    0, 2, 3,
+  };
+  VkBuffer       _vertex_buffer        = VK_NULL_HANDLE;
+  VkDeviceMemory _vertex_buffer_memory = VK_NULL_HANDLE;
+  VkBuffer       _index_buffer         = VK_NULL_HANDLE;
+  VkDeviceMemory _index_buffer_memory  = VK_NULL_HANDLE;
 };
 
 int main()

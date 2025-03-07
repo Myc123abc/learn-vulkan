@@ -3,5 +3,5 @@
 cmake -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_CXX_FLAGS="-stdlib=libc++" -DCMAKE_BUILD_TYPE=Debug -GNinja -Bbuild
 cmake --build build
 
-glslc shader/shader.vert -o shader/vert.spv
-glslc shader/shader.frag -o shader/frag.spv
+glslc -fshader-stage=vertex shader/vertex.glsl -o shader/vertex.spv
+glslc -fshader-stage=fragment shader/fragment.glsl -o shader/fragment.spv
