@@ -13,6 +13,16 @@ add_definitions(-DSPDLOG_HEADER_ONLY)
 find_package(spdlog REQUIRED)
 
 file(GLOB_RECURSE MODULES module/*.cppm)
+set(LIBS
+  glfw
+  vulkan
+  dl
+  pthread
+  X11
+  Xxf86vm
+  Xrandr
+  Xi
+)
 
 add_executable(triangle main.cpp)
 
@@ -26,28 +36,5 @@ target_sources(test
     ${MODULES}
 )
 
-target_include_directories(test PRIVATE
-  include
-)
-
-target_link_libraries(triangle PRIVATE
-  glfw
-  vulkan
-  dl
-  pthread
-  X11
-  Xxf86vm
-  Xrandr
-  Xi
-)
-
-target_link_libraries(test PRIVATE
-  glfw
-  vulkan
-  dl
-  pthread
-  X11
-  Xxf86vm
-  Xrandr
-  Xi
-)
+target_link_libraries(triangle PRIVATE ${LIBS})
+target_link_libraries(test PRIVATE ${LIBS})
