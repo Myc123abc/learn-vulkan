@@ -1,8 +1,8 @@
+#include "Log.hpp"
+#include "Vulkan.hpp"
+
 #include <cstdlib>
 #include <exception>
-
-import Vulkan;
-import Log;
 
 int main()
 {

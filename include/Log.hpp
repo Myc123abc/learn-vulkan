@@ -1,37 +1,34 @@
-module;
+#pragma once
 
 #include <spdlog/spdlog.h>
 
 #include <string_view>
 
-export module Log;
-
 namespace Log
 {
   class Log final
   {
-    friend Log& instance() noexcept;
+    friend void error(std::string_view msg);
+
+    static Log& instance() noexcept
+    {
+      static Log log;
+      return log;
+    }
 
     Log()
     {
       spdlog::set_pattern("%^%L:%$ %v");
     }
 
-  public:
     void error(std::string_view msg)
     {
       spdlog::error(msg.data());
     }
   };
 
-  inline Log& instance() noexcept
+  inline void error(std::string_view msg)
   {
-    static Log log;
-    return log;
-  }
-
-  export void error(std::string_view msg)
-  {
-    instance().error(msg);
+    Log::instance().error(msg);
   }
 }

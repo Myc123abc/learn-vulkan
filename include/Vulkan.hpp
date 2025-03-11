@@ -1,4 +1,4 @@
-module;
+#pragma once
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -7,14 +7,12 @@ module;
 #include <stdexcept>
 #include <string_view>
 
-export module Vulkan;
-
 inline void throw_if(bool b, std::string_view msg)
 {
   if (b) throw std::runtime_error(msg.data());
 }
 
-export class Vulkan final
+class Vulkan final
 {
 public:
   void init(uint32_t width, uint32_t height, std::string_view title)
