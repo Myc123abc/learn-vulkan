@@ -1,3 +1,14 @@
+/*===-- include/Log.hpp ----- Log System ----------------------------------===*\
+|*                                                                            *|
+|* Copyright (c) 2025 Ma Yuncong                                              *|
+|* Licensed under the MIT License.                                            *|
+|*                                                                            *|
+|*===----------------------------------------------------------------------===*|
+|*                                                                            *|
+|* This header implement the log system.                                      *|
+|*                                                                            *|
+\*===----------------------------------------------------------------------===*/
+
 #pragma once
 
 #include <spdlog/spdlog.h>
@@ -27,6 +38,11 @@ namespace Log
     }
   };
 
+  /**
+   * Log error message.
+   *
+   * @param msg error message.
+   */
   inline void error(std::string_view msg)
   {
     Log::instance().error(msg);
