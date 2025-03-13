@@ -69,6 +69,7 @@ namespace Vulkan
      * @param info Vulkan create information. 
      */
     Vulkan(const VulkanCreateInfo& info);
+    ~Vulkan();
   
   
   private:

@@ -25,6 +25,7 @@ int main()
       .height   = 600,
       .title    = "test",
       .app_info = app_info,
+      // TODO: Test empty app_info.
     };
 
     auto vulkan = std::make_unique<class Vulkan>(create_info);

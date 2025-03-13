@@ -20,6 +20,7 @@ namespace Log
   class Log final
   {
     friend void error(std::string_view msg);
+    friend void info(std::string_view msg);
 
     static Log& instance() noexcept
     {
@@ -36,6 +37,11 @@ namespace Log
     {
       spdlog::error(msg.data());
     }
+
+    void info(std::string_view msg)
+    {
+      spdlog::info(msg.data());
+    }
   };
 
   /**
@@ -46,5 +52,15 @@ namespace Log
   inline void error(std::string_view msg)
   {
     Log::instance().error(msg);
+  }
+
+  /**
+   * Log information.
+   *
+   * @param msg information.
+   */
+  inline void info(std::string_view msg)
+  {
+    Log::instance().info(msg);
   }
 }
