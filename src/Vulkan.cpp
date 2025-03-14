@@ -27,9 +27,9 @@ inline void throw_if(bool b, std::string_view msg)
   if (b) throw std::runtime_error(msg.data());
 }
 
-VkApplicationInfo get_app_info(const ApplicationInfo& info)
+VkApplicationInfo to_vk_app_info(const ApplicationInfo& info)
 {
-  VkApplicationInfo ret_info =
+  return VkApplicationInfo
   {
     .sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO,
     .pNext              = nullptr,
@@ -39,7 +39,6 @@ VkApplicationInfo get_app_info(const ApplicationInfo& info)
     .engineVersion      = info.engine_version,
     .apiVersion         = info.vulkan_version,
   };
-  return ret_info;
 }
 
 void check_create_info(const VulkanCreateInfo& info)
@@ -175,13 +174,18 @@ namespace Vulkan
 
 Vulkan::Vulkan(const VulkanCreateInfo& info)
 {
+  check_create_info(info);
   init_window(info.width, info.height, info.title);
   init_vulkan(info);
 }
 
 Vulkan::~Vulkan()
 {
+#ifndef NDEBUG
+  vkDestroyDebugUtilsMessengerEXT(_vulkan, _debug_messenger, nullptr);
+#endif
   vkDestroyInstance(_vulkan, nullptr);
+
   glfwDestroyWindow(_window);
   glfwTerminate();
 }
@@ -199,8 +203,10 @@ void Vulkan::init_window(uint32_t width, uint32_t height, std::string_view title
 
 void Vulkan::init_vulkan(const VulkanCreateInfo& info)
 {
-  check_create_info(info);
   create_vulkan_instance(info);
+#ifndef NDEBUG
+  create_debug_messenger();
+#endif
 }
 
 void Vulkan::create_vulkan_instance(const VulkanCreateInfo& info)
@@ -209,9 +215,7 @@ void Vulkan::create_vulkan_instance(const VulkanCreateInfo& info)
   auto debug_messenger_info = get_debug_messenger_create_info();
 
   // app info
-  VkApplicationInfo app_info;
-  if (info.app_info.has_value())
-    app_info = get_app_info(info.app_info.value());
+  auto app_info = info.app_info.transform(to_vk_app_info);
 
   // layers
 #ifndef NDEBUG
@@ -234,7 +238,7 @@ void Vulkan::create_vulkan_instance(const VulkanCreateInfo& info)
     .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
     .pNext = &debug_messenger_info,
     .flags = 0,
-    .pApplicationInfo = info.app_info.has_value() ? &app_info : nullptr,
+    .pApplicationInfo = app_info ? &app_info.value() : nullptr, 
 #ifndef NDEBUG
     .enabledLayerCount   = 1,
     .ppEnabledLayerNames = &validation_layer,
@@ -244,6 +248,13 @@ void Vulkan::create_vulkan_instance(const VulkanCreateInfo& info)
   };
   throw_if(vkCreateInstance(&create_info, nullptr, &_vulkan) != VK_SUCCESS,
            "failed to create vulkan instance!");
+}
+
+void Vulkan::create_debug_messenger()
+{
+  auto info = get_debug_messenger_create_info();
+  throw_if(vkCreateDebugUtilsMessengerEXT(_vulkan, &info, nullptr, &_debug_messenger) != VK_SUCCESS,
+          "failed to create debug utils messenger extension");
 }
 
 }
