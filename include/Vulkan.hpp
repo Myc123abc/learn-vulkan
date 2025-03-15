@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <string_view>
 #include <optional>
+#include <vector>
 
 namespace Vulkan
 {
@@ -77,6 +78,8 @@ namespace Vulkan
   
     void create_vulkan_instance(const VulkanCreateInfo& info);
     void create_debug_messenger();
+    void create_surface();
+    void select_physical_device();
   
     static VkResult vkCreateDebugUtilsMessengerEXT(
       VkInstance                                  instance,
@@ -100,11 +103,15 @@ namespace Vulkan
     }
 
   private:
-    GLFWwindow* _window;
+    GLFWwindow* _window = nullptr;
   
-    VkInstance _vulkan; 
+    VkInstance _vulkan  = VK_NULL_HANDLE;
 
-    VkDebugUtilsMessengerEXT _debug_messenger;
+    VkDebugUtilsMessengerEXT _debug_messenger = VK_NULL_HANDLE;
+
+    VkSurfaceKHR _surface = VK_NULL_HANDLE;
+
+    VkPhysicalDevice _physical_device = VK_NULL_HANDLE;
   };
 
 }
