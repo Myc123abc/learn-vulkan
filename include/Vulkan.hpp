@@ -80,6 +80,12 @@ namespace Vulkan
     void create_debug_messenger();
     void create_surface();
     void select_physical_device();
+    void create_logical_device();
+    void create_swapchain();
+    void create_image_views();
+    void create_render_pass();
+    void create_destriptor_set_layout();
+    void create_pipeline();
   
     static VkResult vkCreateDebugUtilsMessengerEXT(
       VkInstance                                  instance,
@@ -105,13 +111,31 @@ namespace Vulkan
   private:
     GLFWwindow* _window = nullptr;
   
-    VkInstance _vulkan  = VK_NULL_HANDLE;
+    VkInstance _vulkan = VK_NULL_HANDLE;
 
     VkDebugUtilsMessengerEXT _debug_messenger = VK_NULL_HANDLE;
 
     VkSurfaceKHR _surface = VK_NULL_HANDLE;
 
     VkPhysicalDevice _physical_device = VK_NULL_HANDLE;
+
+    VkDevice _device         = VK_NULL_HANDLE;
+    VkQueue  _graphics_queue = VK_NULL_HANDLE;
+    VkQueue  _present_queue  = VK_NULL_HANDLE;
+
+    VkSwapchainKHR       _swapchain = VK_NULL_HANDLE;
+    std::vector<VkImage> _swapchain_images;
+    VkFormat             _swapchain_image_format;
+    VkExtent2D           _swapchain_image_extent;
+
+    std::vector<VkImageView> _swapchain_image_views;
+
+    VkRenderPass _render_pass = VK_NULL_HANDLE;
+
+    VkDescriptorSetLayout _descriptor_set_layout = VK_NULL_HANDLE;
+
+    VkPipeline       _pipeline        = VK_NULL_HANDLE;
+    VkPipelineLayout _pipeline_layout = VK_NULL_HANDLE;
   };
 
 }

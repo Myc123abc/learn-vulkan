@@ -636,7 +636,6 @@ private:
 
   VkSurfaceFormatKHR get_best_surface_format(const std::vector<VkSurfaceFormatKHR>& formats)
   {
-    VkSurfaceFormatKHR format = {};
     auto it = std::find_if(formats.begin(), formats.end(),
                            [] (const auto& format)
                            {
