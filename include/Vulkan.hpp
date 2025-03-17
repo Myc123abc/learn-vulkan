@@ -18,6 +18,7 @@
 #include <string_view>
 #include <optional>
 #include <vector>
+#include <array>
 
 namespace Vulkan
 {
@@ -86,7 +87,10 @@ namespace Vulkan
     void create_render_pass();
     void create_destriptor_set_layout();
     void create_pipeline();
-  
+    void create_framebuffer(); 
+    void create_command_pool();
+    void create_command_buffers();
+
     static VkResult vkCreateDebugUtilsMessengerEXT(
       VkInstance                                  instance,
       const VkDebugUtilsMessengerCreateInfoEXT*   pCreateInfo,
@@ -136,6 +140,13 @@ namespace Vulkan
 
     VkPipeline       _pipeline        = VK_NULL_HANDLE;
     VkPipelineLayout _pipeline_layout = VK_NULL_HANDLE;
+
+    std::vector<VkFramebuffer> _swapchain_framebuffers;
+
+    VkCommandPool _command_pool = VK_NULL_HANDLE;
+
+    static constexpr uint32_t Max_Frame_Number = 2;
+    std::array<VkCommandBuffer, Max_Frame_Number> _command_buffers;
   };
 
 }

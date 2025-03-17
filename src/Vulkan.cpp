@@ -478,6 +478,11 @@ Vulkan::Vulkan(const VulkanCreateInfo& info)
 
 Vulkan::~Vulkan()
 {
+  vkDestroyCommandPool(_device, _command_pool, nullptr);
+
+  for (auto framebuffer : _swapchain_framebuffers)
+    vkDestroyFramebuffer(_device, framebuffer, nullptr);
+
   vkDestroyPipelineLayout(_device, _pipeline_layout, nullptr);
   vkDestroyPipeline(_device, _pipeline, nullptr);
 
@@ -528,6 +533,9 @@ void Vulkan::init_vulkan(const VulkanCreateInfo& info)
   create_render_pass();
   create_destriptor_set_layout();
   create_pipeline();
+  create_framebuffer();
+  create_command_pool();
+  create_command_buffers();
 }
 
 void Vulkan::create_vulkan_instance(const VulkanCreateInfo& info)
@@ -948,6 +956,52 @@ void Vulkan::create_pipeline()
 
   throw_if(vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &create_info, nullptr, &_pipeline) != VK_SUCCESS,
            "failed to create pipeline");
+}
+
+void Vulkan::create_framebuffer()
+{
+  _swapchain_framebuffers.resize(_swapchain_images.size());
+  for (uint32_t i = 0; i < _swapchain_images.size(); ++i)
+  {
+    VkFramebufferCreateInfo info
+    {
+      .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+      .renderPass = _render_pass,
+      .attachmentCount = 1,
+      .pAttachments    = &_swapchain_image_views[i],
+      .width           = _swapchain_image_extent.width,
+      .height          = _swapchain_image_extent.height,
+      .layers          = 1,
+    };
+    throw_if(vkCreateFramebuffer(_device, &info, nullptr, &_swapchain_framebuffers[i]) != VK_SUCCESS,
+            "failed to create framebuffer");
+  }
+}
+
+void Vulkan::create_command_pool()
+{
+  auto queue_families = get_queue_family_indices(_physical_device, _surface);
+  VkCommandPoolCreateInfo info
+  {
+    .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+    .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+    .queueFamilyIndex = queue_families.graphics_family.value(),
+  };
+  throw_if(vkCreateCommandPool(_device, &info, nullptr, &_command_pool) != VK_SUCCESS,
+           "failed to create command pool");
+}
+
+void Vulkan::create_command_buffers()
+{
+  VkCommandBufferAllocateInfo info
+  {
+    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+    .commandPool = _command_pool,
+    .level       = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+    .commandBufferCount = Max_Frame_Number,
+  };
+  throw_if(vkAllocateCommandBuffers(_device, &info, _command_buffers.data()) != VK_SUCCESS,
+           "failed to create command buffers");
 }
 
 }
