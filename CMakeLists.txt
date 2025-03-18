@@ -6,10 +6,21 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# defines
 add_definitions(-DFMT_HEADER_ONLY)
 add_definitions(-DSPDLOG_HEADER_ONLY)
 
-find_package(spdlog REQUIRED)
+# lib
+# spdlog
+find_package(spdlog CONFIG REQUIRED)
+# vma
+include(FetchContent)
+FetchContent_Declare(
+  VMA
+  GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+  GIT_TAG       master 
+)
+FetchContent_MakeAvailable(VMA)
 
 file(GLOB_RECURSE SOURCE src/*.cpp)
 set(LIBS
@@ -31,6 +42,7 @@ target_include_directories(test PRIVATE include)
 
 target_link_libraries(triangle PRIVATE ${LIBS})
 target_link_libraries(test PRIVATE ${LIBS})
+target_link_libraries(test PRIVATE GPUOpen::VulkanMemoryAllocator)
 
 # doc
 find_package(Doxygen REQUIRED)

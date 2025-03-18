@@ -13,11 +13,9 @@
 #include "Log.hpp"
 
 #include <glm/glm.hpp>
-
 #include <fmt/color.h>
 
 #include <stdexcept>
-#include <vector>
 #include <map>
 #include <ranges>
 #include <set>
@@ -28,6 +26,8 @@ namespace
 
 using namespace Vulkan;
 
+uint32_t Vulkan_Version = -1;
+
 inline auto throw_if(bool b, std::string_view msg)
 {
   if (b) throw std::runtime_error(msg.data());
@@ -35,6 +35,7 @@ inline auto throw_if(bool b, std::string_view msg)
 
 auto to_vk_app_info(const ApplicationInfo& info)
 {
+  Vulkan_Version = info.app_version;
   return VkApplicationInfo
   {
     .sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -52,6 +53,7 @@ auto check_create_info(const VulkanCreateInfo& info)
   throw_if(info.width <= 0, "width of window is invalid value!");
   throw_if(info.height <= 0, "height of window is invalid value!");
   throw_if(info.title.empty(), "title not specified!");
+  throw_if(!info.app_info.has_value() && info.app_info->app_version == -1, "vulkan api version not specified!");
 }
 
 auto get_supported_instance_layers()
@@ -464,6 +466,27 @@ struct Vertex
 
 };
 
+const std::vector<Vertex> Vertices =
+{
+  { { -.5f, -.5f }, { 1.f, 0.f, 0.f } },
+  { {  .5f, -.5f }, { 0.f, 1.f, 0.f } },
+  { {  .5f,  .5f }, { 0.f, 0.f, 1.f } },
+  { { -.5f,  .5f }, { 1.f, 1.f, 1.f } },
+};
+
+const std::vector<uint16_t> Indices =
+{
+  0, 1, 2,
+  0, 2, 3,
+};
+
+struct UniformBufferObject
+{
+  alignas(16) glm::mat4 model;
+  alignas(16) glm::mat4 view;
+  alignas(16) glm::mat4 proj;
+};
+
 }
 
 namespace Vulkan
@@ -478,6 +501,10 @@ Vulkan::Vulkan(const VulkanCreateInfo& info)
 
 Vulkan::~Vulkan()
 {
+  vmaDestroyBuffer(_vma_allocator, _vertex_buffer, _vertex_buffer_allocation);
+  // TODO: use sub-allocation
+  // vmaDestroyBuffer(_vma_allocator, _buffer, _vma_allocation);
+
   vkDestroyCommandPool(_device, _command_pool, nullptr);
 
   for (auto framebuffer : _swapchain_framebuffers)
@@ -495,6 +522,7 @@ Vulkan::~Vulkan()
 
   vkDestroySwapchainKHR(_device, _swapchain, nullptr);
 
+  vmaDestroyAllocator(_vma_allocator);
   vkDestroyDevice(_device, nullptr);
 
   vkDestroySurfaceKHR(_vulkan, _surface, nullptr);
@@ -536,6 +564,7 @@ void Vulkan::init_vulkan(const VulkanCreateInfo& info)
   create_framebuffer();
   create_command_pool();
   create_command_buffers();
+  create_buffers();
 }
 
 void Vulkan::create_vulkan_instance(const VulkanCreateInfo& info)
@@ -665,6 +694,18 @@ void Vulkan::create_logical_device()
   // get queues
   vkGetDeviceQueue(_device, queue_families.graphics_family.value(), 0, &_graphics_queue);
   vkGetDeviceQueue(_device, queue_families.present_family.value(), 0, &_graphics_queue);
+
+  // create VmaAllocator
+  VmaAllocatorCreateInfo alloc_info
+  {
+    .flags            = VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT,
+    .physicalDevice   = _physical_device,
+    .device           = _device,
+    .instance         = _vulkan,
+    .vulkanApiVersion = Vulkan_Version,
+  };
+  throw_if(vmaCreateAllocator(&alloc_info, &_vma_allocator) != VK_SUCCESS,
+           "failed to create Vulkan Memory Allocator");
 }
 
 void Vulkan::create_swapchain()
@@ -1002,6 +1043,53 @@ void Vulkan::create_command_buffers()
   };
   throw_if(vkAllocateCommandBuffers(_device, &info, _command_buffers.data()) != VK_SUCCESS,
            "failed to create command buffers");
+}
+
+void Vulkan::create_buffers()
+{
+  // TODO: vertex, index and uniform use single buffer(sub-allocation)
+
+  uint32_t size = sizeof(Vertices[0]) * Vertices.size();
+
+  // create stage buffer
+  VkBufferCreateInfo buffer_create_info
+  {
+    .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+    .size  = size,
+    .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+             // sizeof(Indices[0]) * Indices.size()   +
+             // sizeof(UniformBufferObject) * Max_Frame_Number,
+    // .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT  |
+    //          VK_BUFFER_USAGE_INDEX_BUFFER_BIT   |
+    //          VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+    //          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+  };
+
+  VmaAllocationCreateInfo alloc_create_info
+  {
+    .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+    .usage = VMA_MEMORY_USAGE_AUTO,
+  };
+
+  VkBuffer          stage_buffer;
+  VmaAllocation     alloc;
+  throw_if(vmaCreateBuffer(_vma_allocator, &buffer_create_info, &alloc_create_info, &stage_buffer, &alloc, nullptr) != VK_SUCCESS,
+           "failed to create buffer");
+
+  // copy data to stage buffer
+  throw_if(vmaCopyMemoryToAllocation(_vma_allocator, Vertices.data(), alloc, 0, size) != VK_SUCCESS,
+           "failed to copy data to stage buffer");
+
+  // create vertex buffer
+  buffer_create_info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  alloc_create_info.flags  = 0;
+  throw_if(vmaCreateBuffer(_vma_allocator, &buffer_create_info, &alloc_create_info, &_vertex_buffer, &_vertex_buffer_allocation, nullptr) != VK_SUCCESS,
+           "failed to create buffer");
+  // copy stage buffer data to vertex buffer
+  copy_buffer(stage_buffer, _vertex_buffer, size);
+
+  vmaDestroyBuffer(_vma_allocator, stage_buffer, alloc);
 }
 
 }
