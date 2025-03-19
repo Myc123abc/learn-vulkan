@@ -13,6 +13,7 @@
 #include "Log.hpp"
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <fmt/color.h>
 
 #include <stdexcept>
@@ -20,6 +21,7 @@
 #include <ranges>
 #include <set>
 #include <fstream>
+#include <chrono>
 
 namespace
 {
@@ -501,6 +503,18 @@ Vulkan::Vulkan(const VulkanCreateInfo& info)
 
 Vulkan::~Vulkan()
 {
+  for (uint32_t i = 0; i < Max_Frame_Number; ++i)
+  {
+    vkDestroySemaphore(_device, _image_available_semaphores[i], nullptr);
+    vkDestroySemaphore(_device, _render_finished_semaphores[i], nullptr);
+    vkDestroyFence(_device, _in_flight_fences[i], nullptr);
+  }
+
+  vkDestroyDescriptorPool(_device, _descriptor_pool, nullptr);
+
+  for (uint32_t i = 0; i < Max_Frame_Number; ++i)
+    vmaDestroyBuffer(_vma_allocator, _uniform_buffers[i], _uniform_buffer_allocations[i]);
+  vmaDestroyBuffer(_vma_allocator, _index_buffer, _index_buffer_allocation);
   vmaDestroyBuffer(_vma_allocator, _vertex_buffer, _vertex_buffer_allocation);
   // TODO: use sub-allocation
   // vmaDestroyBuffer(_vma_allocator, _buffer, _vma_allocation);
@@ -565,6 +579,9 @@ void Vulkan::init_vulkan(const VulkanCreateInfo& info)
   create_command_pool();
   create_command_buffers();
   create_buffers();
+  create_descriptor_pool();
+  create_descriptor_sets();
+  create_sync_objects();
 }
 
 void Vulkan::create_vulkan_instance(const VulkanCreateInfo& info)
@@ -693,7 +710,7 @@ void Vulkan::create_logical_device()
 
   // get queues
   vkGetDeviceQueue(_device, queue_families.graphics_family.value(), 0, &_graphics_queue);
-  vkGetDeviceQueue(_device, queue_families.present_family.value(), 0, &_graphics_queue);
+  vkGetDeviceQueue(_device, queue_families.present_family.value(), 0, &_present_queue);
 
   // create VmaAllocator
   VmaAllocatorCreateInfo alloc_info
@@ -1045,24 +1062,14 @@ void Vulkan::create_command_buffers()
            "failed to create command buffers");
 }
 
-void Vulkan::create_buffers()
+void* Vulkan::bad_create_buffer(VkBuffer& buf, VmaAllocation& al, uint32_t size, const void* dst, VkBufferUsageFlags usage, bool use_gpu)
 {
-  // TODO: vertex, index and uniform use single buffer(sub-allocation)
-
-  uint32_t size = sizeof(Vertices[0]) * Vertices.size();
-
   // create stage buffer
   VkBufferCreateInfo buffer_create_info
   {
     .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
     .size  = size,
     .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-             // sizeof(Indices[0]) * Indices.size()   +
-             // sizeof(UniformBufferObject) * Max_Frame_Number,
-    // .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT  |
-    //          VK_BUFFER_USAGE_INDEX_BUFFER_BIT   |
-    //          VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
-    //          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
   };
 
   VmaAllocationCreateInfo alloc_create_info
@@ -1071,25 +1078,258 @@ void Vulkan::create_buffers()
     .usage = VMA_MEMORY_USAGE_AUTO,
   };
 
+  if (!use_gpu)
+  {
+    buffer_create_info.usage = usage;
+    alloc_create_info.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    VmaAllocationInfo info;
+    throw_if(vmaCreateBuffer(_vma_allocator, &buffer_create_info, &alloc_create_info, &buf, &al, &info) != VK_SUCCESS,
+             "failed to create buffer");
+    return info.pMappedData;
+  }
+
   VkBuffer          stage_buffer;
   VmaAllocation     alloc;
   throw_if(vmaCreateBuffer(_vma_allocator, &buffer_create_info, &alloc_create_info, &stage_buffer, &alloc, nullptr) != VK_SUCCESS,
            "failed to create buffer");
 
   // copy data to stage buffer
-  throw_if(vmaCopyMemoryToAllocation(_vma_allocator, Vertices.data(), alloc, 0, size) != VK_SUCCESS,
+  throw_if(vmaCopyMemoryToAllocation(_vma_allocator, dst, alloc, 0, size) != VK_SUCCESS,
            "failed to copy data to stage buffer");
 
   // create vertex buffer
-  buffer_create_info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+  buffer_create_info.usage = usage |
                              VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   alloc_create_info.flags  = 0;
-  throw_if(vmaCreateBuffer(_vma_allocator, &buffer_create_info, &alloc_create_info, &_vertex_buffer, &_vertex_buffer_allocation, nullptr) != VK_SUCCESS,
+  throw_if(vmaCreateBuffer(_vma_allocator, &buffer_create_info, &alloc_create_info, &buf, &al, nullptr) != VK_SUCCESS,
            "failed to create buffer");
   // copy stage buffer data to vertex buffer
-  copy_buffer(stage_buffer, _vertex_buffer, size);
+  copy_buffer(stage_buffer, buf, size);
 
   vmaDestroyBuffer(_vma_allocator, stage_buffer, alloc);
+  return nullptr;
+}
+
+void Vulkan::create_buffers()
+{
+  // TODO: vertex, index and uniform use single buffer(sub-allocation)
+  bad_create_buffer(_vertex_buffer, _vertex_buffer_allocation, sizeof(Vertices[0]) * Vertices.size(), Vertices.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+  bad_create_buffer(_index_buffer, _index_buffer_allocation, sizeof(Indices[0]) * Indices.size(), Indices.data(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+  for (int i = 0; i < Max_Frame_Number; ++i)
+    _uniform_buffers_mapped[i] = bad_create_buffer(_uniform_buffers[i], _uniform_buffer_allocations[i], sizeof(UniformBufferObject), nullptr, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, false);
+}
+
+void Vulkan::create_descriptor_pool()
+{
+  VkDescriptorPoolSize size
+  {
+    .type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+    .descriptorCount = Max_Frame_Number,
+  };
+  VkDescriptorPoolCreateInfo info
+  {
+    .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+    .maxSets       = Max_Frame_Number,
+    .poolSizeCount = 1,
+    .pPoolSizes    = &size,
+  };
+  throw_if(vkCreateDescriptorPool(_device, &info, nullptr, &_descriptor_pool) != VK_SUCCESS,
+           "failed to create descriptor pool");
+}
+
+void Vulkan::create_descriptor_sets()
+{
+  std::vector<VkDescriptorSetLayout> layouts(Max_Frame_Number, _descriptor_set_layout);
+  VkDescriptorSetAllocateInfo info
+  {
+    .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+    .descriptorPool     = _descriptor_pool,
+    .descriptorSetCount = Max_Frame_Number,
+    .pSetLayouts        = layouts.data(),
+  };
+  throw_if(vkAllocateDescriptorSets(_device, &info, _descriptor_sets.data()) != VK_SUCCESS,
+           "failed to create descriptor sets");
+
+  std::array<VkWriteDescriptorSet, Max_Frame_Number> writes;
+  for (uint32_t i = 0; i < Max_Frame_Number; ++i)
+  {
+    VkDescriptorBufferInfo info
+    {
+      .buffer = _uniform_buffers[i],
+      .range  = sizeof(UniformBufferObject),
+    };
+    writes[i] = VkWriteDescriptorSet
+    {
+      .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+      .dstSet          = _descriptor_sets[i],
+      .dstBinding      = 0,
+      .descriptorCount = 1,
+      .descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+      .pBufferInfo     = &info,
+    };
+  }
+  vkUpdateDescriptorSets(_device, writes.size(), writes.data(), 0, nullptr);
+}
+
+void Vulkan::create_sync_objects()
+{
+  VkSemaphoreCreateInfo sem_info
+  {
+    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+  };
+  VkFenceCreateInfo fence_info
+  {
+    .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+    .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+  };
+  for (uint32_t i = 0; i < Max_Frame_Number; ++i)
+  {
+    throw_if
+    (
+      vkCreateSemaphore(_device, &sem_info, nullptr, &_image_available_semaphores[i]) != VK_SUCCESS |
+      vkCreateSemaphore(_device, &sem_info, nullptr, &_render_finished_semaphores[i]) != VK_SUCCESS |
+      vkCreateFence(_device, &fence_info, nullptr, &_in_flight_fences[i]) != VK_SUCCESS,
+      "faield to create sync objects"
+    );
+  }
+}
+
+void Vulkan::run()
+{
+  while (!glfwWindowShouldClose(_window))
+  {
+    glfwPollEvents();
+    draw();
+  }
+
+  vkDeviceWaitIdle(_device);
+}
+
+void Vulkan::update_uniform_buffers(uint32_t current_frame)
+{
+  static auto start_time = std::chrono::high_resolution_clock::now();
+  auto current_time = std::chrono::high_resolution_clock::now();
+  float time = std::chrono::duration<float, std::chrono::seconds::period>(current_time - start_time).count();
+
+  UniformBufferObject ubo;
+  ubo.model = glm::rotate(glm::mat4(1.f), time * glm::radians(90.f), glm::vec3(0.f, 0.f, 1.f));
+  ubo.view  = glm::lookAt(glm::vec3(2.f, 2.f, 2.f), glm::vec3(0.f, 0.f, 0.f), glm::vec3(0.f, 0.f, 1.f));
+  ubo.proj  = glm::perspective(glm::radians(45.f), _swapchain_image_extent.width / (float)_swapchain_image_extent.height, 1.f, 10.f);
+  ubo.proj[1][1] *= -1;
+
+  // TODO: use vma to presently mapped, and vma's copy memory function
+  memcpy(_uniform_buffers_mapped[current_frame], &ubo, sizeof(ubo));
+}
+
+void Vulkan::draw()
+{
+  // TODO: use frame resources to replace every xxx[_current_frame]
+
+  update_uniform_buffers(_current_frame);
+
+  vkWaitForFences(_device, 1, &_in_flight_fences[_current_frame], VK_TRUE, UINT64_MAX);
+
+  uint32_t image_index;
+  throw_if(vkAcquireNextImageKHR(_device, _swapchain, UINT64_MAX, _image_available_semaphores[_current_frame], VK_NULL_HANDLE, &image_index) != VK_SUCCESS,
+           "failed to acquire swap chain image");
+
+  vkResetFences(_device, 1, &_in_flight_fences[_current_frame]);
+
+  vkResetCommandBuffer(_command_buffers[_current_frame], 0);
+  record_command_buffer(_command_buffers[_current_frame], image_index);
+
+  VkSemaphore wait_sems[] = { _image_available_semaphores[_current_frame] };
+  VkPipelineStageFlags wait_stages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+  VkSemaphore signal_sems[] = { _render_finished_semaphores[_current_frame] };
+  VkSubmitInfo info
+  {
+    .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+    .waitSemaphoreCount   = 1,
+    .pWaitSemaphores      = wait_sems,
+    .pWaitDstStageMask    = wait_stages,
+    .commandBufferCount   = 1,
+    .pCommandBuffers      = &_command_buffers[_current_frame],
+    .signalSemaphoreCount = 1,
+    .pSignalSemaphores    = signal_sems,
+  };
+  throw_if(vkQueueSubmit(_graphics_queue, 1, &info, _in_flight_fences[_current_frame]) != VK_SUCCESS,
+           "failed to submit command buffer");
+
+  VkPresentInfoKHR presentation_info
+  {
+    .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+    .waitSemaphoreCount = 1,
+    .pWaitSemaphores    = signal_sems,
+    .swapchainCount     = 1,
+    .pSwapchains        = &_swapchain,
+    .pImageIndices      = &image_index,
+  };
+  throw_if(vkQueuePresentKHR(_present_queue, &presentation_info) != VK_SUCCESS,
+           "failed to present swapchain image");
+
+  _current_frame = ++_current_frame % Max_Frame_Number;
+}
+    
+void Vulkan::record_command_buffer(VkCommandBuffer command_buffer, uint32_t image_index)
+{
+  VkCommandBufferBeginInfo begin
+  {
+    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+  };
+  throw_if(vkBeginCommandBuffer(command_buffer, &begin) != VK_SUCCESS,
+           "failed to begin command buffer");
+
+  VkClearValue clear
+  {
+    (float)32/255,
+    (float)33/255,
+    (float)36/255,
+    1.f,
+  };
+  VkRenderPassBeginInfo render_pass_begin_info
+  {
+    .sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+    .renderPass  = _render_pass,
+    .framebuffer = _swapchain_framebuffers[image_index],
+    .renderArea  =
+    {
+      .offset = { 0, 0 },
+      .extent = _swapchain_image_extent,
+    },
+    .clearValueCount = 1,
+    .pClearValues    = &clear,
+  };
+  vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+
+  vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline);
+
+  VkViewport viewport
+  {
+    .width    = (float)_swapchain_image_extent.width,
+    .height   = (float)_swapchain_image_extent.height,
+    .maxDepth = 1.f,
+  };
+  vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+
+  VkRect2D scissor
+  {
+    .offset = { 0, 0 },
+    .extent = _swapchain_image_extent,
+  };
+  vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+
+  VkDeviceSize offsets[] = { 0 };
+  vkCmdBindVertexBuffers(command_buffer, 0, 1, &_vertex_buffer, offsets);
+  vkCmdBindIndexBuffer(command_buffer, _index_buffer, 0, VK_INDEX_TYPE_UINT16);
+
+  vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout, 0, 1, &_descriptor_sets[_current_frame], 0, nullptr);
+
+  vkCmdDrawIndexed(command_buffer, (uint32_t)Indices.size(), 1, 0, 0, 0);
+
+  vkCmdEndRenderPass(command_buffer);
+
+  throw_if(vkEndCommandBuffer(command_buffer) != VK_SUCCESS,
+           "failed to end command buffer");
 }
 
 }

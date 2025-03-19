@@ -72,6 +72,8 @@ namespace Vulkan
      */
     Vulkan(const VulkanCreateInfo& info);
     ~Vulkan();
+
+    void run();
   
   private:
     void init_window(uint32_t width, uint32_t height, std::string_view title);
@@ -91,6 +93,13 @@ namespace Vulkan
     void create_command_pool();
     void create_command_buffers();
     void create_buffers();
+    void create_descriptor_pool();
+    void create_descriptor_sets();
+    void create_sync_objects();
+
+    void draw();
+    void update_uniform_buffers(uint32_t current_frame);
+    void record_command_buffer(VkCommandBuffer command_buffer, uint32_t image_index);
 
     static VkResult vkCreateDebugUtilsMessengerEXT(
       VkInstance                                  instance,
@@ -160,9 +169,20 @@ namespace Vulkan
     VkBuffer      _index_buffer             = VK_NULL_HANDLE;
     VmaAllocation _index_buffer_allocation  = VK_NULL_HANDLE;
     std::array<VkBuffer, Max_Frame_Number>      _uniform_buffers;
-    std::array<VmaAllocation, Max_Frame_Number> _uniform_buffer_allocationss;
+    std::array<VmaAllocation, Max_Frame_Number> _uniform_buffer_allocations;
+    std::array<void*, Max_Frame_Number>         _uniform_buffers_mapped;
+
+    VkDescriptorPool                              _descriptor_pool = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, Max_Frame_Number> _descriptor_sets;
+
+    std::array<VkSemaphore, Max_Frame_Number> _image_available_semaphores;
+    std::array<VkSemaphore, Max_Frame_Number> _render_finished_semaphores;
+    std::array<VkFence, Max_Frame_Number>     _in_flight_fences;
+
+    uint32_t _current_frame = 0;
 
     // HACK: tmp func
+  void* bad_create_buffer(VkBuffer& buf, VmaAllocation& al, uint32_t size, const void* dst, VkBufferUsageFlags usage, bool use_gpu = true);
   void copy_buffer(VkBuffer src, VkBuffer dst, VkDeviceSize size) 
   {
     // create temporary command buffer to transfer data from stage buffer to device local buffer
@@ -209,6 +229,7 @@ namespace Vulkan
     // free temporary command buffer
     vkFreeCommandBuffers(_device, _command_pool, 1, &command_buffer);
   }
+
   };
 
 }

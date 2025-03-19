@@ -28,6 +28,7 @@ int main()
     };
 
     auto vulkan = std::make_unique<class Vulkan>(create_info);
+    vulkan->run();
   }
   catch (const std::exception& e)
   {
