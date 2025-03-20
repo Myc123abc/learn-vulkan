@@ -74,6 +74,8 @@ namespace Vulkan
     ~Vulkan();
 
     void run();
+
+    void test();
   
   private:
     void init_window(uint32_t width, uint32_t height, std::string_view title);

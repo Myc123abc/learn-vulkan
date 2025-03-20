@@ -582,6 +582,8 @@ void Vulkan::init_vulkan(const VulkanCreateInfo& info)
   create_descriptor_pool();
   create_descriptor_sets();
   create_sync_objects();
+
+  test();
 }
 
 void Vulkan::create_vulkan_instance(const VulkanCreateInfo& info)
@@ -1331,5 +1333,195 @@ void Vulkan::record_command_buffer(VkCommandBuffer command_buffer, uint32_t imag
   throw_if(vkEndCommandBuffer(command_buffer) != VK_SUCCESS,
            "failed to end command buffer");
 }
+
+/****************************\
+|*          Test            *|
+\****************************/
+
+// Print Memory Information
+void print_heap_type(VkFlags flags)
+{
+  fmt::print("  Flags: ");
+  std::vector<std::string_view> types;
+  if (flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+    types.emplace_back("VK_MEMORY_HEAP_DEVICE_LOCAL_BIT");
+  if (flags & VK_MEMORY_HEAP_MULTI_INSTANCE_BIT)
+    types.emplace_back("VK_MEMORY_HEAP_MULTI_INSTANCE_BIT");
+
+  if (types.empty())
+  {
+    fmt::println("None");
+    return;
+  }
+
+  auto it = types.begin();
+  fmt::println("{}", *it++);
+  for (; it < types.end(); ++it)
+    fmt::println("         {}", *it);
+}
+
+void print_memory_type(VkFlags flags)
+{
+  fmt::print("  Flags:      ");
+  std::vector<std::string_view> types;
+  if (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+    types.emplace_back("VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT");
+  if (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
+    types.emplace_back("VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT");
+  if (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+    types.emplace_back("VK_MEMORY_PROPERTY_HOST_COHERENT_BIT");
+  if (flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+    types.emplace_back("VK_MEMORY_PROPERTY_HOST_CACHED_BIT");
+  if (flags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT)
+    types.emplace_back("VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT");
+  if (flags & VK_MEMORY_PROPERTY_PROTECTED_BIT)
+    types.emplace_back("VK_MEMORY_PROPERTY_PROTECTED_BIT");
+  if (flags & VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD)
+    types.emplace_back("VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD");
+  if (flags & VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD)
+    types.emplace_back("VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD");
+  if (flags & VK_MEMORY_PROPERTY_RDMA_CAPABLE_BIT_NV)
+    types.emplace_back("VK_MEMORY_PROPERTY_RDMA_CAPABLE_BIT_NV");
+
+  if (types.empty())
+  {
+    fmt::println("None");
+    return;
+  }
+
+  auto it = types.begin();
+  fmt::println("{}", *it++);
+  for (; it < types.end(); ++it)
+    fmt::println("              {}", *it);
+}
+
+void print_memory_information(VkPhysicalDevice physical_device)
+{
+  VkPhysicalDeviceMemoryProperties memory_properties;
+  vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
+
+  fmt::println("Heap Type:");
+  VkMemoryHeap* heap;
+  for (uint32_t i = 0; i < memory_properties.memoryHeapCount; ++i)
+  {
+    heap = &memory_properties.memoryHeaps[i];
+    fmt::print("  Index: {}\n"
+               "  Size:  {}MB\n",
+                 i, (double)heap->size / 1024 / 1024);
+    print_heap_type(heap->flags);
+  }
+  fmt::println("");
+
+  fmt::println("Memory Type:");
+  VkMemoryType* mem;
+  for (uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i)
+  {
+    mem = &memory_properties.memoryTypes[i];
+    fmt::print("  Index:      {}\n"
+               "  Heap Index: {}\n",
+                i, mem->heapIndex);
+    print_memory_type(mem->propertyFlags);
+  }
+  fmt::println("");
+}
+
+void print_memory_requirements(const VkMemoryRequirements& mem_req)
+{
+  fmt::print("Memory Requirements:\n"
+             "  Size:       {}B\n"
+             "  Aligment:   {}B\n",
+             mem_req.size, mem_req.alignment);
+  print_memory_type(mem_req.memoryTypeBits);
+}
+
+uint32_t get_memory_type(const VkPhysicalDeviceMemoryProperties& mem_properties, VkFlags supported_types, VkMemoryPropertyFlags required_properties)
+{
+  uint32_t count = mem_properties.memoryTypeCount;
+  for (uint32_t i = 0; i < count; ++i)
+    if (supported_types & (1 << i) &&
+        (mem_properties.memoryTypes[i].propertyFlags & required_properties) == required_properties)
+      return i; 
+
+  throw std::runtime_error("failed to get memory type");
+}
+
+void Vulkan::test()
+{
+  print_memory_information(_physical_device);
+
+  uint32_t size = sizeof(Vertices[0]) * Vertices.size();
+
+  VkBuffer buffer;
+  VkBufferCreateInfo buf_info
+  {
+    .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+    .size  = size,
+    .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+  };
+  throw_if(vkCreateBuffer(_device, &buf_info, nullptr, &buffer) != VK_SUCCESS,
+           "failed to create buffer");
+
+// >>> buffer2
+  size = sizeof(Indices[1]) * Indices.size();
+  VkBuffer buffer2;
+  buf_info.size  = size,
+  buf_info.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+  throw_if(vkCreateBuffer(_device, &buf_info, nullptr, &buffer2) != VK_SUCCESS,
+           "failed to create buffer");
+// end
+
+  VkMemoryRequirements mem_req;
+  vkGetBufferMemoryRequirements(_device, buffer, &mem_req);
+
+  print_memory_requirements(mem_req);
+
+  VkMemoryPropertyFlags flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+
+  VkPhysicalDeviceMemoryProperties mem_properties;
+  vkGetPhysicalDeviceMemoryProperties(_physical_device, &mem_properties);
+  uint32_t mem_type = get_memory_type(mem_properties, mem_req.memoryTypeBits, flags);
+
+// >>> buffer2
+  VkMemoryRequirements mem_req2;
+  vkGetBufferMemoryRequirements(_device, buffer2, &mem_req2);
+  print_memory_requirements(mem_req2);
+  uint32_t mem_type2 = get_memory_type(mem_properties, mem_req.memoryTypeBits, flags);
+
+  // TODO: ensure mem_req2.alignment is min size
+  uint32_t offset1 = 0;
+  uint32_t offset2 = (mem_req.size + mem_req2.alignment - 1) & ~(mem_req2.alignment - 1);
+  uint32_t total_size = offset2 + mem_req2.size;
+// end
+  
+  VkDeviceMemory memory;
+  VkMemoryAllocateInfo alloc_info
+  {
+    .sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+    // .allocationSize = mem_req.size,
+    // TODO: when use sub-allocation, need to know 
+    // VkPhysicalDeviceMaintenance3Properties::maxMemoryAllocationSize and
+    // VkPhysicalDeviceLimits::maxMemoryAllocationCount
+    // or budget?
+    // and maybe need remain heap size...
+    .allocationSize  = total_size,
+    // TODO: multi-mem_type is same?
+    .memoryTypeIndex = mem_type,
+  };
+  throw_if(vkAllocateMemory(_device, &alloc_info, nullptr, &memory) != VK_SUCCESS,
+           "failed to allocate memory");
+
+  vkBindBufferMemory(_device, buffer, memory, 0);
+// >>> buffer2
+  vkBindBufferMemory(_device, buffer2, memory, offset2);
+// end
+
+  vkDestroyBuffer(_device, buffer, nullptr);
+// >>> buffer2
+  vkDestroyBuffer(_device, buffer2, nullptr);
+// end
+  vkFreeMemory(_device, memory, nullptr);
+}
+
 
 }
