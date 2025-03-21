@@ -513,11 +513,11 @@ Vulkan::~Vulkan()
   vkDestroyDescriptorPool(_device, _descriptor_pool, nullptr);
 
   for (uint32_t i = 0; i < Max_Frame_Number; ++i)
-    vmaDestroyBuffer(_vma_allocator, _uniform_buffers[i], _uniform_buffer_allocations[i]);
+    vkDestroyBuffer(_device, _uniform_buffers[i], nullptr);
+  vkFreeMemory(_device, _uniform_buffers_memory, nullptr);
+
   vmaDestroyBuffer(_vma_allocator, _index_buffer, _index_buffer_allocation);
   vmaDestroyBuffer(_vma_allocator, _vertex_buffer, _vertex_buffer_allocation);
-  // TODO: use sub-allocation
-  // vmaDestroyBuffer(_vma_allocator, _buffer, _vma_allocation);
 
   vkDestroyCommandPool(_device, _command_pool, nullptr);
 
@@ -1064,63 +1064,6 @@ void Vulkan::create_command_buffers()
            "failed to create command buffers");
 }
 
-void* Vulkan::bad_create_buffer(VkBuffer& buf, VmaAllocation& al, uint32_t size, const void* dst, VkBufferUsageFlags usage, bool use_gpu)
-{
-  // create stage buffer
-  VkBufferCreateInfo buffer_create_info
-  {
-    .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-    .size  = size,
-    .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-  };
-
-  VmaAllocationCreateInfo alloc_create_info
-  {
-    .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-    .usage = VMA_MEMORY_USAGE_AUTO,
-  };
-
-  if (!use_gpu)
-  {
-    buffer_create_info.usage = usage;
-    alloc_create_info.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
-    VmaAllocationInfo info;
-    throw_if(vmaCreateBuffer(_vma_allocator, &buffer_create_info, &alloc_create_info, &buf, &al, &info) != VK_SUCCESS,
-             "failed to create buffer");
-    return info.pMappedData;
-  }
-
-  VkBuffer          stage_buffer;
-  VmaAllocation     alloc;
-  throw_if(vmaCreateBuffer(_vma_allocator, &buffer_create_info, &alloc_create_info, &stage_buffer, &alloc, nullptr) != VK_SUCCESS,
-           "failed to create buffer");
-
-  // copy data to stage buffer
-  throw_if(vmaCopyMemoryToAllocation(_vma_allocator, dst, alloc, 0, size) != VK_SUCCESS,
-           "failed to copy data to stage buffer");
-
-  // create vertex buffer
-  buffer_create_info.usage = usage |
-                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-  alloc_create_info.flags  = 0;
-  throw_if(vmaCreateBuffer(_vma_allocator, &buffer_create_info, &alloc_create_info, &buf, &al, nullptr) != VK_SUCCESS,
-           "failed to create buffer");
-  // copy stage buffer data to vertex buffer
-  copy_buffer(stage_buffer, buf, size);
-
-  vmaDestroyBuffer(_vma_allocator, stage_buffer, alloc);
-  return nullptr;
-}
-
-void Vulkan::create_buffers()
-{
-  // TODO: vertex, index and uniform use single buffer(sub-allocation)
-  bad_create_buffer(_vertex_buffer, _vertex_buffer_allocation, sizeof(Vertices[0]) * Vertices.size(), Vertices.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-  bad_create_buffer(_index_buffer, _index_buffer_allocation, sizeof(Indices[0]) * Indices.size(), Indices.data(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-  for (int i = 0; i < Max_Frame_Number; ++i)
-    _uniform_buffers_mapped[i] = bad_create_buffer(_uniform_buffers[i], _uniform_buffer_allocations[i], sizeof(UniformBufferObject), nullptr, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, false);
-}
-
 void Vulkan::create_descriptor_pool()
 {
   VkDescriptorPoolSize size
@@ -1358,6 +1301,7 @@ void print_heap_type(VkFlags flags)
   fmt::println("{}", *it++);
   for (; it < types.end(); ++it)
     fmt::println("         {}", *it);
+  fmt::println("");
 }
 
 void print_memory_type(VkFlags flags)
@@ -1393,6 +1337,7 @@ void print_memory_type(VkFlags flags)
   fmt::println("{}", *it++);
   for (; it < types.end(); ++it)
     fmt::println("              {}", *it);
+  fmt::println("");
 }
 
 void print_memory_information(VkPhysicalDevice physical_device)
@@ -1434,7 +1379,7 @@ void print_memory_requirements(const VkMemoryRequirements& mem_req)
   print_memory_type(mem_req.memoryTypeBits);
 }
 
-uint32_t get_memory_type(const VkPhysicalDeviceMemoryProperties& mem_properties, VkFlags supported_types, VkMemoryPropertyFlags required_properties)
+uint32_t get_memory_type_index(const VkPhysicalDeviceMemoryProperties& mem_properties, VkFlags supported_types, VkMemoryPropertyFlags required_properties)
 {
   uint32_t count = mem_properties.memoryTypeCount;
   for (uint32_t i = 0; i < count; ++i)
@@ -1445,83 +1390,250 @@ uint32_t get_memory_type(const VkPhysicalDeviceMemoryProperties& mem_properties,
   throw std::runtime_error("failed to get memory type");
 }
 
-void Vulkan::test()
+struct BufferCreateInfo
 {
-  print_memory_information(_physical_device);
+  uint32_t            size;
+  VkBufferCreateFlags usage;
+};
 
-  uint32_t size = sizeof(Vertices[0]) * Vertices.size();
-
-  VkBuffer buffer;
-  VkBufferCreateInfo buf_info
+void create_buffers(VkDevice device, VkBuffer* buffers, BufferCreateInfo* buffer_create_infos, uint32_t count)
+{
+  VkBufferCreateInfo create_info
   {
     .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-    .size  = size,
-    .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
   };
-  throw_if(vkCreateBuffer(_device, &buf_info, nullptr, &buffer) != VK_SUCCESS,
-           "failed to create buffer");
 
-// >>> buffer2
-  size = sizeof(Indices[1]) * Indices.size();
-  VkBuffer buffer2;
-  buf_info.size  = size,
-  buf_info.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-  throw_if(vkCreateBuffer(_device, &buf_info, nullptr, &buffer2) != VK_SUCCESS,
-           "failed to create buffer");
-// end
+  BufferCreateInfo* buffer_create_info;
+  for (uint32_t i = 0; i < count; ++i)
+  {
+    buffer_create_info = &buffer_create_infos[i];
+    create_info.size =  buffer_create_info->size;
+    create_info.usage = buffer_create_info->usage;
+    throw_if(vkCreateBuffer(device, &create_info, nullptr, &buffers[i]) != VK_SUCCESS,
+             "failed to create buffer");
+  }
+}
 
-  VkMemoryRequirements mem_req;
-  vkGetBufferMemoryRequirements(_device, buffer, &mem_req);
+void destroy_buffers(VkDevice device, VkBuffer* buffers, uint32_t count)
+{
+  for (uint32_t i = 0; i < count; ++i)
+    vkDestroyBuffer(device, buffers[i], nullptr);
+}
 
-  print_memory_requirements(mem_req);
+struct MemoryAllocateInfo 
+{
+  VkPhysicalDevice      physical_device;
+  VkDevice              logical_device;
+  VkBuffer*             buffers;
+  uint32_t              count;
+  VkMemoryPropertyFlags memory_properties;
+};
 
-  VkMemoryPropertyFlags flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+struct BufferInfo
+{
+  VkBuffer buffer;
+  uint32_t offset; 
+  uint32_t size;
+  uint32_t alignment;
+};
 
-  VkPhysicalDeviceMemoryProperties mem_properties;
-  vkGetPhysicalDeviceMemoryProperties(_physical_device, &mem_properties);
-  uint32_t mem_type = get_memory_type(mem_properties, mem_req.memoryTypeBits, flags);
+VkDeviceMemory allocate_memory(const MemoryAllocateInfo& info, BufferInfo* buffer_infos = nullptr)
+{
+  // get physical device memory properties
+  VkPhysicalDeviceMemoryProperties device_mem_properties;
+  vkGetPhysicalDeviceMemoryProperties(info.physical_device, &device_mem_properties);
 
-// >>> buffer2
-  VkMemoryRequirements mem_req2;
-  vkGetBufferMemoryRequirements(_device, buffer2, &mem_req2);
-  print_memory_requirements(mem_req2);
-  uint32_t mem_type2 = get_memory_type(mem_properties, mem_req.memoryTypeBits, flags);
+  // get all memory requirements
+  std::vector<VkMemoryRequirements> mem_reqs;
+  uint32_t common_mem_type = 0xFFFFFFFF;
+  for (uint32_t i = 0; i < info.count; ++i)
+  {
+    VkMemoryRequirements mem_req;
+    vkGetBufferMemoryRequirements(info.logical_device, info.buffers[i], &mem_req);
+#ifndef NDEBUG
+    print_memory_requirements(mem_req);
+#endif
+    // get common memory type
+    common_mem_type &= mem_req.memoryTypeBits;
+    if (!common_mem_type)
+      throw std::runtime_error("failed to find common memory type");
 
-  // TODO: ensure mem_req2.alignment is min size
-  uint32_t offset1 = 0;
-  uint32_t offset2 = (mem_req.size + mem_req2.alignment - 1) & ~(mem_req2.alignment - 1);
-  uint32_t total_size = offset2 + mem_req2.size;
-// end
+    mem_reqs.emplace_back(mem_req);
+  }
+  // get memory type index by common memory type
+  uint32_t mem_type_index = get_memory_type_index(device_mem_properties, common_mem_type, info.memory_properties);
+#ifndef NDEBUG
+  fmt::println("Type Index: {}\n", mem_type_index);
+#endif
+
+  // sort alignment size from max to min
+  std::vector<BufferInfo> buf_infos;
+  for(uint32_t i = 0; i < info.count; ++i)
+  {
+    BufferInfo buf_info
+    {
+      .buffer    = info.buffers[i],
+      .size      = (uint32_t)mem_reqs[i].size,
+      .alignment = (uint32_t)mem_reqs[i].alignment,
+    };
+    buf_infos.emplace_back(buf_info);
+  }
+  std::sort(buf_infos.begin(), buf_infos.end(),
+    [](const auto& l, const auto& r)
+    {
+      return l.alignment == r.alignment
+               ? l.size      > r.size
+               : l.alignment > r.alignment;
+    });
+
+  // get total memory size
+  uint32_t i = 0;
+  for (i = 1; i < info.count; ++i)
+    buf_infos[i].offset = (buf_infos[i - 1].offset + buf_infos[i - 1].size + buf_infos[i].alignment - 1)  & ~(buf_infos[i].alignment - 1);
+  --i;
+  uint32_t total_size = buf_infos[i].offset + buf_infos[i].size;
   
-  VkDeviceMemory memory;
+  // allocate memory
   VkMemoryAllocateInfo alloc_info
   {
     .sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-    // .allocationSize = mem_req.size,
     // TODO: when use sub-allocation, need to know 
     // VkPhysicalDeviceMaintenance3Properties::maxMemoryAllocationSize and
     // VkPhysicalDeviceLimits::maxMemoryAllocationCount
     // or budget?
     // and maybe need remain heap size...
     .allocationSize  = total_size,
-    // TODO: multi-mem_type is same?
-    .memoryTypeIndex = mem_type,
+    .memoryTypeIndex = mem_type_index,
   };
-  throw_if(vkAllocateMemory(_device, &alloc_info, nullptr, &memory) != VK_SUCCESS,
+  VkDeviceMemory memory;
+  throw_if(vkAllocateMemory(info.logical_device, &alloc_info, nullptr, &memory) != VK_SUCCESS,
            "failed to allocate memory");
 
-  vkBindBufferMemory(_device, buffer, memory, 0);
-// >>> buffer2
-  vkBindBufferMemory(_device, buffer2, memory, offset2);
-// end
+  // bind memory with buffers
+  for (uint32_t i = 0; i < info.count; ++i)
+    vkBindBufferMemory(info.logical_device, buf_infos[i].buffer, memory, buf_infos[i].offset);
 
-  vkDestroyBuffer(_device, buffer, nullptr);
-// >>> buffer2
-  vkDestroyBuffer(_device, buffer2, nullptr);
-// end
+  if (buffer_infos != nullptr)
+    memcpy(buffer_infos, buf_infos.data(), buf_infos.size() * sizeof(BufferInfo));
+
+  return memory;
+}
+
+void Vulkan::test()
+{
+  print_memory_information(_physical_device);
+
+  VkBuffer vertex_buffer, index_buffer;
+  VkBuffer buffers[] = { vertex_buffer, index_buffer };
+  std::vector<BufferCreateInfo> infos
+  {
+    {
+      .size  = static_cast<uint32_t>(sizeof(Vertices[0]) * Vertices.size()),
+      .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    },
+    {
+      .size  = static_cast<uint32_t>(sizeof(Indices[0]) * Indices.size()),
+      .usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+    },
+  };
+  ::create_buffers(_device, buffers, infos.data(), infos.size());
+
+  MemoryAllocateInfo mem_info
+  {
+    .physical_device   = _physical_device,
+    .logical_device    = _device,
+    .buffers           = buffers,
+    .count             = (uint32_t)infos.size(),
+    .memory_properties = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+  };
+  VkDeviceMemory memory = allocate_memory(mem_info);
+
+  destroy_buffers(_device, buffers, infos.size());
   vkFreeMemory(_device, memory, nullptr);
 }
 
+void* Vulkan::bad_create_buffer(VkBuffer& buf, VmaAllocation& al, uint32_t size, const void* dst, VkBufferUsageFlags usage, bool use_gpu)
+{
+  // create stage buffer
+  VkBufferCreateInfo buffer_create_info
+  {
+    .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+    .size  = size,
+    .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+  };
+
+  VmaAllocationCreateInfo alloc_create_info
+  {
+    .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+    .usage = VMA_MEMORY_USAGE_AUTO,
+  };
+
+  if (!use_gpu)
+  {
+    buffer_create_info.usage = usage;
+    alloc_create_info.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    VmaAllocationInfo info;
+    throw_if(vmaCreateBuffer(_vma_allocator, &buffer_create_info, &alloc_create_info, &buf, &al, &info) != VK_SUCCESS,
+             "failed to create buffer");
+    return info.pMappedData;
+  }
+
+  VkBuffer          stage_buffer;
+  VmaAllocation     alloc;
+  throw_if(vmaCreateBuffer(_vma_allocator, &buffer_create_info, &alloc_create_info, &stage_buffer, &alloc, nullptr) != VK_SUCCESS,
+           "failed to create buffer");
+
+  // copy data to stage buffer
+  throw_if(vmaCopyMemoryToAllocation(_vma_allocator, dst, alloc, 0, size) != VK_SUCCESS,
+           "failed to copy data to stage buffer");
+
+  // create vertex buffer
+  buffer_create_info.usage = usage |
+                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  alloc_create_info.flags  = 0;
+  throw_if(vmaCreateBuffer(_vma_allocator, &buffer_create_info, &alloc_create_info, &buf, &al, nullptr) != VK_SUCCESS,
+           "failed to create buffer");
+  // copy stage buffer data to vertex buffer
+  copy_buffer(stage_buffer, buf, size);
+
+  vmaDestroyBuffer(_vma_allocator, stage_buffer, alloc);
+  return nullptr;
+}
+
+void Vulkan::create_buffers()
+{
+  // TODO: vertex, index and uniform use single buffer(sub-allocation)
+  bad_create_buffer(_vertex_buffer, _vertex_buffer_allocation, sizeof(Vertices[0]) * Vertices.size(), Vertices.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+  bad_create_buffer(_index_buffer, _index_buffer_allocation, sizeof(Indices[0]) * Indices.size(), Indices.data(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+
+  // TODO: use my allocator to alloc once memory for all uniform buffers
+  // I need to implement a memory allocator to manage memory
+  BufferCreateInfo buf_info
+  {
+    .size  = sizeof(UniformBufferObject),
+    .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+  };
+  std::vector<BufferCreateInfo> buf_infos(Max_Frame_Number, buf_info);
+  ::create_buffers(_device, _uniform_buffers.data(), buf_infos.data(), Max_Frame_Number);
+
+  MemoryAllocateInfo mem_info
+  {
+    .physical_device   = _physical_device,
+    .logical_device    = _device,
+    .buffers           = _uniform_buffers.data(),
+    .count             = Max_Frame_Number,
+    .memory_properties = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+  };
+  std::array<BufferInfo, Max_Frame_Number> buffer_infos;
+  _uniform_buffers_memory = allocate_memory(mem_info, buffer_infos.data());
+
+  uint8_t* mapped;
+  uint32_t size = buffer_infos[Max_Frame_Number - 1].offset + buffer_infos[Max_Frame_Number - 1].size;
+  vkMapMemory(_device, _uniform_buffers_memory, 0, size, 0, (void**)&mapped);
+  for (uint32_t i = 0; i < Max_Frame_Number; ++i)
+    _uniform_buffers_mapped[i] = mapped + buffer_infos[i].offset;
+}
 
 }

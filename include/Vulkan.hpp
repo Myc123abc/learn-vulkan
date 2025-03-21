@@ -171,7 +171,8 @@ namespace Vulkan
     VkBuffer      _index_buffer             = VK_NULL_HANDLE;
     VmaAllocation _index_buffer_allocation  = VK_NULL_HANDLE;
     std::array<VkBuffer, Max_Frame_Number>      _uniform_buffers;
-    std::array<VmaAllocation, Max_Frame_Number> _uniform_buffer_allocations;
+    // std::array<VmaAllocation, Max_Frame_Number> _uniform_buffer_allocations;
+    VkDeviceMemory                              _uniform_buffers_memory;
     std::array<void*, Max_Frame_Number>         _uniform_buffers_mapped;
 
     VkDescriptorPool                              _descriptor_pool = VK_NULL_HANDLE;
