@@ -93,6 +93,7 @@ namespace Vulkan
     void create_command_pool();
     void create_command_buffers();
     void create_buffers();
+    void create_images();
     void create_descriptor_pool();
     void create_descriptor_sets();
     void create_sync_objects();
@@ -121,6 +122,14 @@ namespace Vulkan
       if (func != nullptr)
         func(instance, messenger, pAllocator);
     }
+
+    void* bad_create_buffer(VkBuffer& buf, VmaAllocation& al, uint32_t size, const void* dst, VkBufferUsageFlags usage, bool use_gpu = true);
+    void copy_buffer(VkBuffer src, VkBuffer dst, VkDeviceSize size);
+    void transition_image_layout(VkImage image, VkFormat format, VkImageLayout old_layout, VkImageLayout new_layout);
+    void copy(VkBuffer src, VkImage dst, uint32_t width, uint32_t height);
+
+    VkCommandBuffer begin_single_time_commands();
+    void end_single_time_commands(VkCommandBuffer command_buffer);
 
   private:
     GLFWwindow* _window = nullptr;
@@ -159,11 +168,6 @@ namespace Vulkan
     static constexpr uint32_t Max_Frame_Number = 2;
     std::array<VkCommandBuffer, Max_Frame_Number> _command_buffers;
 
-    // TODO: sub-allocation
-    // VkBuffer      _buffer         = VK_NULL_HANDLE;
-    // VmaAllocation _vma_allocation = VK_NULL_HANDLE;
-
-    // HACK: create seperate buffer...
     VkBuffer      _vertex_buffer            = VK_NULL_HANDLE;
     VmaAllocation _vertex_buffer_allocation = VK_NULL_HANDLE;
     VkBuffer      _index_buffer             = VK_NULL_HANDLE;
@@ -181,55 +185,10 @@ namespace Vulkan
 
     uint32_t _current_frame = 0;
 
-    // HACK: tmp func
-  void* bad_create_buffer(VkBuffer& buf, VmaAllocation& al, uint32_t size, const void* dst, VkBufferUsageFlags usage, bool use_gpu = true);
-  void copy_buffer(VkBuffer src, VkBuffer dst, VkDeviceSize size) 
-  {
-    // create temporary command buffer to transfer data from stage buffer to device local buffer
-    VkCommandBufferAllocateInfo command_buffer_allocate_info =
-    {
-      .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-      .commandPool        = _command_pool,
-      .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-      .commandBufferCount = 1,
-    };
-    VkCommandBuffer command_buffer;
-    vkAllocateCommandBuffers(_device, &command_buffer_allocate_info, &command_buffer);
-
-    // record start transfer command
-    VkCommandBufferBeginInfo begin_info =
-    {
-      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-      .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-    };
-    vkBeginCommandBuffer(command_buffer, &begin_info);
-
-    // record transfer data command
-    VkBufferCopy copy_region =
-    {
-      .size = size,
-    };
-    vkCmdCopyBuffer(command_buffer, src, dst, 1, &copy_region);
-
-    // end record command
-    vkEndCommandBuffer(command_buffer);
-
-    // submit command
-    VkSubmitInfo submit_info =
-    {
-      .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-      .commandBufferCount = 1,
-      .pCommandBuffers    = &command_buffer,
-    };
-    vkQueueSubmit(_graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
-
-    // wait transfer to complete
-    vkQueueWaitIdle(_graphics_queue);
-
-    // free temporary command buffer
-    vkFreeCommandBuffers(_device, _command_pool, 1, &command_buffer);
-  }
-
+    VkImage        _image;
+    VmaAllocation  _image_allocation;
+    VkImageView    _image_view;
+    VkSampler      _image_sampler;
   };
 
 }
