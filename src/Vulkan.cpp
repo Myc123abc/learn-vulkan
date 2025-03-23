@@ -11,6 +11,7 @@
 
 #include "Vulkan.hpp"
 #include "Log.hpp"
+#include "Mesh.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -480,13 +481,9 @@ struct Vertex
 
 };
 
+const Mesh Mesh = get_rectangle_mesh
+
 const std::vector<Vertex> Vertices =
-{
-  { { -.5f, -.5f }, { 1.f, 0.f, 0.f }, { 1.f, 0.f } },
-  { {  .5f, -.5f }, { 0.f, 1.f, 0.f }, { 0.f, 0.f } },
-  { {  .5f,  .5f }, { 0.f, 0.f, 1.f }, { 0.f, 1.f } },
-  { { -.5f,  .5f }, { 1.f, 1.f, 1.f }, { 1.f, 1.f } },
-};
 
 const std::vector<uint16_t> Indices =
 {
@@ -1348,6 +1345,10 @@ void Vulkan::run()
   vkDeviceWaitIdle(_device);
 }
 
+extern glm::mat4 model;
+extern glm::mat4 view;
+extern glm::mat4 proj;
+
 void Vulkan::update_uniform_buffers(uint32_t current_frame)
 {
   static auto start_time = std::chrono::high_resolution_clock::now();
@@ -1355,10 +1356,10 @@ void Vulkan::update_uniform_buffers(uint32_t current_frame)
   float time = std::chrono::duration<float, std::chrono::seconds::period>(current_time - start_time).count();
 
   UniformBufferObject ubo;
-  ubo.model = glm::rotate(glm::mat4(1.f), time * glm::radians(90.f), glm::vec3(0.f, 0.f, 1.f));
-  ubo.view  = glm::lookAt(glm::vec3(2.f, 2.f, 2.f), glm::vec3(0.f, 0.f, 0.f), glm::vec3(0.f, 0.f, 1.f));
-  ubo.proj  = glm::perspective(glm::radians(45.f), _swapchain_image_extent.width / (float)_swapchain_image_extent.height, 1.f, 10.f);
-  ubo.proj[1][1] *= -1;
+  ubo.model = model;
+  ubo.view  = view;
+  ubo.proj  = proj;
+  auto result = proj * view * model;
 
   // TODO: use vma to presently mapped, and vma's copy memory function
   vmaCopyMemoryToAllocation(_vma_allocator, &ubo, _uniform_buffer_allocations[current_frame], 0, sizeof(ubo));

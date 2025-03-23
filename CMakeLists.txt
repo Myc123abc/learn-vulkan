@@ -9,6 +9,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # defines
 add_definitions(-DFMT_HEADER_ONLY)
 add_definitions(-DSPDLOG_HEADER_ONLY)
+add_definitions(-DGLM_FORCE_DEPTH_ZERO_TO_ONE)
+add_definitions(-DGLM_FORCE_LEFT_HANDED)
 
 # lib
 # spdlog
@@ -34,21 +36,18 @@ set(LIBS
   Xi
 )
 
-add_executable(triangle main.cpp)
-
 add_executable(test test.cpp ${SOURCE})
 
 target_include_directories(test PRIVATE include)
 
-target_link_libraries(triangle PRIVATE ${LIBS})
 target_link_libraries(test PRIVATE ${LIBS})
 target_link_libraries(test PRIVATE GPUOpen::VulkanMemoryAllocator)
 
 # doc
-find_package(Doxygen REQUIRED)
-
-set(DOXYGEN_EXTRACT_ALL YES)
-set(DOXYGEN_AUTOLINK_SUPPORT NO)
-
-doxygen_add_docs(doc ALL
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+# find_package(Doxygen REQUIRED)
+#
+# set(DOXYGEN_EXTRACT_ALL YES)
+# set(DOXYGEN_AUTOLINK_SUPPORT NO)
+#
+# doxygen_add_docs(doc ALL
+#   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
